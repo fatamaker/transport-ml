@@ -300,4 +300,58 @@ public class AIAgent {
         
         return report.toString(); // CORRECTION : point-virgule ajouté ici
     }
+    
+    public String analyzeCsvData(String csvContent, String userQuery) {
+        log.info("📊 Analyse CSV - Question : '{}'", userQuery);
+        log.info("📄 Contenu CSV (premières 500 chars) : {}", 
+                 csvContent.substring(0, Math.min(500, csvContent.length())));
+        
+        if (userQuery == null) {
+            return "❌ Question non fournie";
+        }
+        
+        try {
+            String response = chatClient.prompt()
+                .system("""
+                    Tu es un expert en analyse de données de transport.
+                    Tu dois analyser les données CSV fournies par l'utilisateur.
+                    
+                    RÈGLES STRICTES :
+                    1. Réponds UNIQUEMENT en français
+                    2. Utilise EXCLUSIVEMENT les données du CSV fourni
+                    3. Cherche les termes en anglais ET en français
+                    4. Regarde toutes les colonnes : IncidentReason, RaisonIncident, Météo, Weather, etc.
+                    5. Donne des réponses courtes et précises
+                    6. Si tu trouves une correspondance, cite le numéro de transport et les détails
+                    
+                    Termes à chercher pour la météo :
+                    - "Weather Conditions" 
+                    - "Météo"
+                    - "Conditions météorologiques"
+                    - "Intempéries"
+                    - "Neige", "Pluie", "Tempête"
+                    """)
+                .user("""
+                    DONNÉES CSV À ANALYSER :
+                    ```csv
+                    """ + csvContent + """
+                    ```
+                    
+                    QUESTION : """ + userQuery + """
+                    
+                    Analyse les données CSV ligne par ligne. 
+                    Regarde la colonne "IncidentReason" ou toute autre colonne de raison.
+                    Réponds en français.
+                    """)
+                .call()
+                .content();
+            
+            log.info("✅ Réponse CSV générée : {}", response);
+            return response;
+            
+        } catch (Exception e) {
+            log.error("❌ Erreur analyse CSV", e);
+            return "Erreur lors de l'analyse : " + e.getMessage();
+        }
+    }
 }

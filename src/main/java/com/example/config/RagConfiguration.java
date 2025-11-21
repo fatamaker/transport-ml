@@ -25,7 +25,7 @@ public class RagConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(RagConfiguration.class);
 
-    @Value("classpath:pdfs/manuel.pdf")
+    @Value("classpath:pdfs/manuel_exploitation.pdf")
     private Resource pdfResource;
     
     // Store pour garder TOUS les documents en mémoire (backup)
