@@ -2,9 +2,11 @@ package com.example.controllers;
 
 
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import com.example.agents.AIAgent;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
 @RestController
@@ -25,5 +27,13 @@ public class AIAgentController {
     @GetMapping("/chat")
     public String chat(@RequestParam("query") String query) {
         return agent.chat(query);
+    }
+    
+
+    
+    
+    @GetMapping("/test-rag")
+    public String testRag(@RequestParam String query) {
+        return agent.testRag(query);
     }
 }
