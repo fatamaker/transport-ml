@@ -21,7 +21,8 @@ import java.util.List;
 @RequiredArgsConstructor
 @Slf4j
 public class AIAgent {
-	private final ChatClient.Builder builder;
+    
+    private final ChatClient.Builder builder;
     private final TransportTools transportTools;
     private final WeatherTools weatherTools;
     private final VectorStore vectorStore;
@@ -32,231 +33,225 @@ public class AIAgent {
 
     @PostConstruct
     public void init() {
-        log.info("🤖 Initialisation de l'AIAgent UNIVERSEL avec RAG et WeatherTools");
+        log.info("🤖 Initialisation AIAgent Transport + Météo + RAG");
 
         String fullText = RagConfiguration.getFullDocumentText();
-        boolean isSmallDocument = fullText.length() < SMALL_DOCUMENT_THRESHOLD;
+        boolean isSmallDoc = fullText.length() < SMALL_DOCUMENT_THRESHOLD;
 
-        if (isSmallDocument) {
-            log.info("📄 Document petit ({} caractères) - Mode contexte complet activé", fullText.length());
-
+        if (isSmallDoc) {
             this.chatClient = builder
-                    .defaultSystem("""
-                        Tu es un assistant expert qui répond UNIQUEMENT à partir du document suivant et des outils disponibles.
-                        
-                        === DOCUMENT COMPLET ===
-                        """ + fullText + """
-                        
-                        === FIN DU DOCUMENT ===
-                        
-                        INSTRUCTIONS :
-                        1. Lis ATTENTIVEMENT tout le document ci-dessus
-                        2. Réponds UNIQUEMENT avec les informations du document
-                        3. Cite toujours la section et les valeurs exactes
-                        4. Format : "D'après le document (Section X.X) : [détails]"
-                        5. Si l'info n'est pas dans le document : dis "Information non trouvée dans le document"
-                        """)
-                    .defaultFunctions(
-                            "getDelayedTransports",
-                            "getTransportDetailsByNumber",
-                            "currentWeather",
-                            "forecastWeather"
-                    )
-                    .build();
-
+                .defaultSystem(buildSystemPrompt(fullText))
+                .defaultFunctions(
+                    "getDelayedTransports",
+                    "getTransportDetailsByNumber",
+                    "currentWeather",
+                    "forecastWeather"
+                )
+                .build();
         } else {
-            log.info("📚 Document volumineux ({} caractères) - Mode RAG hybride activé", fullText.length());
-
             this.chatClient = builder
-                    .defaultSystem("""
-                        Tu es un assistant expert qui répond à partir des extraits de documents fournis et des outils disponibles.
-                        
-                        INSTRUCTIONS :
-                        1. Lis ATTENTIVEMENT tous les extraits fournis
-                        2. Réponds en citant les sections et valeurs exactes
-                        3. Format : "D'après le document (Section X.X) : [détails]"
-                        4. Si l'info n'est pas dans le contexte : dis "Information non trouvée dans les extraits fournis"
-                        """)
-                    .defaultFunctions(
-                            "getDelayedTransports",
-                            "getTransportDetailsByNumber",
-                            "currentWeather",
-                            "forecastWeather"
-                    )
-                    .build();
+                .defaultSystem(buildSystemPrompt(null))
+                .defaultFunctions(
+                    "getDelayedTransports",
+                    "getTransportDetailsByNumber",
+                    "currentWeather",
+                    "forecastWeather"
+                )
+                .build();
         }
 
-        log.info("✅ AIAgent UNIVERSEL initialisé avec succès");
+        log.info("✅ AIAgent Transport initialisé");
     }
 
+    /**
+     * SYSTEM PROMPT INTELLIGENT – Gère PDF + CSV + API Transport + API Météo
+     */
+    private String buildSystemPrompt(String fullDocumentText) {
+        StringBuilder prompt = new StringBuilder();
+
+        prompt.append("""
+            Tu es un assistant spécialisé dans les transports (trains, bus, métro)
+            et les conditions météorologiques en temps réel.
+
+            Tu disposes de 3 SOURCES D’INFORMATION :
+
+            ======================
+            🔹 SOURCE 1 : PDF de politique transport (Manuel)
+            ======================
+            """);
+
+        if (fullDocumentText != null) {
+            prompt.append(fullDocumentText);
+            prompt.append("\n=== FIN DU DOCUMENT ===\n\n");
+        } else {
+            prompt.append("Le document PDF sera fourni via RAG dans le contexte.\n\n");
+        }
+
+        prompt.append("""
+            ======================
+            🔹 SOURCE 2 : API Transport via Tools
+            ======================
+            Fonctions disponibles :
+            - getDelayedTransports() : liste des transports en retard
+            - getTransportDetailsByNumber(number) : info sur un transport (retard, incident, durée…)
+
+            ======================
+            🔹 SOURCE 3 : API Météo via Tools
+            ======================
+            - currentWeather(city)
+            - forecastWeather(city)
+
+            ======================
+            🔹 SOURCE 4 : CSV uploadé
+            ======================
+            Utilisé uniquement si l'utilisateur fournit un CSV.
+            
+            ==========================================
+            RÈGLES DE ROUTAGE INTELLIGENTES
+            ==========================================
+
+            1️⃣ Si l'utilisateur fournit un CSV → ANALYSE UNIQUEMENT LE CSV  
+            2️⃣ Si la question concerne :
+                - retard
+                - durée
+                - numéro de train / bus
+                - incident
+               → APPELLE les fonctions TransportTools
+
+            3️⃣ Si la question concerne :
+                - météo
+                - prévisions
+               → APPELLE WeatherTools
+
+            4️⃣ Si la question concerne :
+                - politique
+                - règles
+                - sections
+                - procédures
+               → Utilise le document PDF (direct ou via RAG)
+
+            ==========================================
+            INTERDICTIONS ABSOLUES
+            ==========================================
+
+            ❌ Ne cherche PAS la météo dans le PDF  
+            ❌ Ne cherche PAS une règle PDF pour une question sur un train réel  
+            ❌ Ne mélange JAMAIS PDF / CSV / API  
+
+            ==========================================
+            Format attendu des réponses
+            ==========================================
+
+            - Pour PDF : "D'après le document (Section X.X) : …"
+            - Pour TransportTools : réponse basée sur l’API
+            - Pour Météo : résumé clair
+            - Pour CSV : "D'après les données CSV : …"
+            """);
+
+        return prompt.toString();
+    }
+
+
+    /**
+     * ROUTAGE AUTOMATIQUE
+     */
     public String chat(String userQuery) {
         log.info("💬 Question reçue : {}", userQuery);
+
         try {
-            String context = getRelevantContext(userQuery);
+            String type = detectQueryType(userQuery);
+            log.info("🎯 Type détecté : {}", type);
 
-            if (RagConfiguration.getFullDocumentText().length() < SMALL_DOCUMENT_THRESHOLD) {
-                log.info("📄 Utilisation du contexte complet du system prompt");
-                return chatClient.prompt().user(userQuery).call().content();
-            } else {
-                String enrichedQuery = """
-                    CONTEXTE DU DOCUMENT :
-                    """ + context + """
-                    
-                    QUESTION :
-                    """ + userQuery;
+            switch (type) {
 
-                log.info("📚 Contexte ajouté ({} caractères)", context.length());
-                return chatClient.prompt().user(enrichedQuery).call().content();
+                case "CSV":
+                    return chatClient.prompt()
+                            .user(userQuery)
+                            .call()
+                            .content();
+
+                case "TRANSPORT":
+                    return chatClient.prompt()
+                            .user(userQuery + "\n\n⚠ Cette question concerne les transports → utilise les fonctions.")
+                            .call()
+                            .content();
+
+                case "WEATHER":
+                    return chatClient.prompt()
+                            .user(userQuery + "\n\n⚠ Cette question concerne la météo → utilise les fonctions météo.")
+                            .call()
+                            .content();
+
+                case "DOCUMENT":
+                default:
+                    String fullText = RagConfiguration.getFullDocumentText();
+
+                    if (fullText.length() < SMALL_DOCUMENT_THRESHOLD) {
+                        return chatClient.prompt().user(userQuery).call().content();
+                    }
+
+                    String context = getRelevantContext(userQuery);
+                    return chatClient.prompt()
+                            .user("CONTEXTE DU DOCUMENT :\n" + context + "\n\nQUESTION :\n" + userQuery)
+                            .call()
+                            .content();
             }
 
         } catch (Exception e) {
-            log.error("❌ Erreur lors du traitement de la requête", e);
-            return "Désolé, une erreur s'est produite : " + e.getMessage();
+            log.error("❌ Erreur", e);
+            return "Erreur : " + e.getMessage();
         }
     }
 
+    /**
+     * DETECTION DU TYPE DE QUESTION
+     */
+    private String detectQueryType(String q) {
+        String t = q.toLowerCase();
+
+        // CSV
+        if (t.contains("données csv") || t.contains("contexte :") || t.contains("```csv")) {
+            return "CSV";
+        }
+
+        // Transport
+        if (t.contains("train") || t.contains("bus")
+                || t.contains("tgv") || t.contains("retard")
+                || t.contains("incident") || t.contains("numéro")) {
+            return "TRANSPORT";
+        }
+
+        // Météo
+        if (t.contains("météo") || t.contains("weather") || t.contains("température") || t.contains("pluie")) {
+            return "WEATHER";
+        }
+
+        // PDF
+        return "DOCUMENT";
+    }
+
+
+    /**
+     * 🔍 CONTEXTE RAG
+     */
     private String getRelevantContext(String query) {
-        log.info("🔍 Recherche de contexte pertinent pour : {}", query);
+        List<Document> docs = vectorStore.similaritySearch(
+            SearchRequest.query(query)
+                .withTopK(8)
+                .withSimilarityThreshold(0.2)
+        );
 
-        List<Document> relevantDocs = new ArrayList<>();
-        List<String> searchVariations = generateSearchVariations(query);
-
-        for (String term : searchVariations) {
-            if (!relevantDocs.isEmpty()) break;
-            relevantDocs = vectorStore.similaritySearch(
-                    SearchRequest.query(term).withTopK(8).withSimilarityThreshold(0.15)
-            );
-            log.info("🎯 Recherche '{}' : {} documents trouvés", term, relevantDocs.size());
+        if (docs.isEmpty()) {
+            docs = RagConfiguration.keywordSearch(query, 8);
         }
 
-        if (relevantDocs.isEmpty()) {
-            log.warn("⚠ Aucun résultat - Utilisation du document complet");
-            return RagConfiguration.getFullDocumentText();
-        }
+        if (docs.isEmpty()) return RagConfiguration.getFullDocumentText();
 
-        return buildContextFromDocuments(relevantDocs);
-    }
-
-    /**
-     * Génère des variations de recherche pour améliorer les résultats
-     */
-    private List<String> generateSearchVariations(String originalQuery) {
-        List<String> variations = new ArrayList<>();
-        variations.add(originalQuery);
-        
-        String lowerQuery = originalQuery.toLowerCase();
-        
-        if (lowerQuery.contains("retard")) {
-            variations.add("retard mineur 0 à 15 minutes");
-            variations.add("retard important 15 à 60 minutes");
-            variations.add("retard critique 60 minutes");
-            variations.add("CHAPITRE 1 POLITIQUE GESTION RETARDS");
-            variations.add("dédommagement retard");
-            variations.add("procédure retard train");
-        }
-        
-        if (lowerQuery.contains("tgv") || lowerQuery.contains("train")) {
-            variations.add("train procédure");
-            variations.add("transport ferroviaire");
-        }
-        
-        if (lowerQuery.contains("manuel")) {
-            variations.add("MANUEL D'EXPLOITATION");
-            variations.add("CHAPITRE");
-            variations.add("section procédure");
-        }
-        
-        return variations;
+        StringBuilder sb = new StringBuilder("=== EXTRACTS ===\n");
+        for (Document d : docs) sb.append(d.getContent()).append("\n");
+        return sb.toString();
     }
     
-    /**
-     * Recherche manuelle des sections sur les retards
-     */
-    private List<Document> searchManualSections() {
-        List<Document> allDocs = RagConfiguration.getAllDocuments();
-        List<Document> retardDocs = new ArrayList<>();
-        
-        for (Document doc : allDocs) {
-            String content = doc.getContent().toLowerCase();
-            if (content.contains("retard") || 
-                content.contains("chapître 1") || 
-                content.contains("politique") ||
-                content.contains("dédommagement") ||
-                content.contains("minutes")) {
-                retardDocs.add(doc);
-                if (retardDocs.size() >= 5) break;
-            }
-        }
-        
-        log.info("🔎 Recherche manuelle : {} documents sur les retards trouvés", retardDocs.size());
-        return retardDocs;
-    }
-    
-    private String buildContextFromDocuments(List<Document> documents) {
-        StringBuilder context = new StringBuilder();
-        context.append("=== INFORMATIONS PERTINENTES DU MANUEL ===\n\n");
-        
-        for (int i = 0; i < documents.size(); i++) {
-            Document doc = documents.get(i);
-            context.append("--- Extrait ").append(i + 1).append(" ---\n");
-            context.append(doc.getContent()).append("\n\n");
-            
-            log.info("📄 Extrait {} : {}...", 
-                     i + 1, 
-                     doc.getContent().substring(0, Math.min(100, doc.getContent().length())));
-        }
-        
-        context.append("=== FIN DES INFORMATIONS ===\n\n");
-        return context.toString();
-    }
-    
-    /**
-     * Méthode de test pour diagnostiquer le RAG
-     */
-    public String testRag(String query) {
-        log.info("🔬 Test du système RAG pour : {}", query);
-        
-        StringBuilder report = new StringBuilder();
-        report.append("=== DIAGNOSTIC RAG ===\n\n");
-        
-        // Test 1 : Taille du document
-        String fullText = RagConfiguration.getFullDocumentText();
-        report.append("📊 Taille du document : ").append(fullText.length()).append(" caractères\n");
-        report.append("📦 Nombre total de chunks : ").append(RagConfiguration.getAllDocuments().size()).append("\n\n");
-        
-        // Test 2 : Recherche vectorielle
-        try {
-            List<Document> vectorResults = vectorStore.similaritySearch(
-                SearchRequest.query(query).withTopK(5).withSimilarityThreshold(0.2)
-            );
-            report.append("🎯 Recherche vectorielle : ").append(vectorResults.size()).append(" résultats\n");
-            for (int i = 0; i < Math.min(3, vectorResults.size()); i++) {
-                String preview = vectorResults.get(i).getContent()
-                    .substring(0, Math.min(100, vectorResults.get(i).getContent().length()));
-                report.append("   - Résultat ").append(i + 1).append(" : ").append(preview).append("...\n");
-            }
-        } catch (Exception e) {
-            report.append("❌ Recherche vectorielle échouée : ").append(e.getMessage()).append("\n");
-        }
-        report.append("\n");
-        
-        // Test 3 : Recherche par mots-clés
-        List<Document> keywordResults = RagConfiguration.keywordSearch(query, 5);
-        report.append("📝 Recherche par mots-clés : ").append(keywordResults.size()).append(" résultats\n");
-        for (int i = 0; i < Math.min(3, keywordResults.size()); i++) {
-            String preview = keywordResults.get(i).getContent()
-                .substring(0, Math.min(100, keywordResults.get(i).getContent().length()));
-            report.append("   - Résultat ").append(i + 1).append(" : ").append(preview).append("...\n");
-        }
-        report.append("\n");
-        
-        // Test 4 : Contexte final
-        String context = getRelevantContext(query);
-        report.append("📄 Contexte final : ").append(context.length()).append(" caractères\n");
-        report.append("Aperçu : ").append(context.substring(0, Math.min(200, context.length()))).append("...\n");
-        
-        return report.toString(); // CORRECTION : point-virgule ajouté ici
-    }
     
     public String analyzeCsvData(String csvContent, String userQuery) {
         log.info("📊 Analyse CSV - Question : '{}'", userQuery);
@@ -310,5 +305,49 @@ public class AIAgent {
             log.error("❌ Erreur analyse CSV", e);
             return "Erreur lors de l'analyse : " + e.getMessage();
         }
+    }
+    public String testRag(String query) {
+        log.info("🔬 Test du système RAG pour : {}", query);
+        
+        StringBuilder report = new StringBuilder();
+        report.append("=== DIAGNOSTIC RAG ===\n\n");
+        
+        // Test 1 : Taille du document
+        String fullText = RagConfiguration.getFullDocumentText();
+        report.append("📊 Taille du document : ").append(fullText.length()).append(" caractères\n");
+        report.append("📦 Nombre total de chunks : ").append(RagConfiguration.getAllDocuments().size()).append("\n\n");
+        
+        // Test 2 : Recherche vectorielle
+        try {
+            List<Document> vectorResults = vectorStore.similaritySearch(
+                SearchRequest.query(query).withTopK(5).withSimilarityThreshold(0.2)
+            );
+            report.append("🎯 Recherche vectorielle : ").append(vectorResults.size()).append(" résultats\n");
+            for (int i = 0; i < Math.min(3, vectorResults.size()); i++) {
+                String preview = vectorResults.get(i).getContent()
+                    .substring(0, Math.min(100, vectorResults.get(i).getContent().length()));
+                report.append("   - Résultat ").append(i + 1).append(" : ").append(preview).append("...\n");
+            }
+        } catch (Exception e) {
+            report.append("❌ Recherche vectorielle échouée : ").append(e.getMessage()).append("\n");
+        }
+        report.append("\n");
+        
+        // Test 3 : Recherche par mots-clés
+        List<Document> keywordResults = RagConfiguration.keywordSearch(query, 5);
+        report.append("📝 Recherche par mots-clés : ").append(keywordResults.size()).append(" résultats\n");
+        for (int i = 0; i < Math.min(3, keywordResults.size()); i++) {
+            String preview = keywordResults.get(i).getContent()
+                .substring(0, Math.min(100, keywordResults.get(i).getContent().length()));
+            report.append("   - Résultat ").append(i + 1).append(" : ").append(preview).append("...\n");
+        }
+        report.append("\n");
+        
+        // Test 4 : Contexte final
+        String context = getRelevantContext(query);
+        report.append("📄 Contexte final : ").append(context.length()).append(" caractères\n");
+        report.append("Aperçu : ").append(context.substring(0, Math.min(200, context.length()))).append("...\n");
+        
+        return report.toString(); // CORRECTION : point-virgule ajouté ici
     }
 }
