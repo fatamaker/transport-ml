@@ -12,6 +12,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.web.reactive.function.client.WebClient;
+
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -32,6 +37,13 @@ public class RagConfiguration {
     private static final List<Document> ALL_DOCUMENTS = new ArrayList<>();
     private static String FULL_DOCUMENT_TEXT = "";
 
+    @Bean
+    public WebClient webClient() {
+        return WebClient.builder()
+                .baseUrl("http://localhost:4005")
+                .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .build();
+    }
     @Bean
     public VectorStore vectorStore(EmbeddingModel embeddingModel) {
         SimpleVectorStore simpleVectorStore = new SimpleVectorStore(embeddingModel);
@@ -139,4 +151,5 @@ public class RagConfiguration {
         log.info("📊 Recherche par mots-clés : {} résultats trouvés", results.size());
         return results.subList(0, Math.min(maxResults, results.size()));
     }
+    
 }

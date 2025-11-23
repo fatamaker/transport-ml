@@ -8,6 +8,7 @@ import org.springframework.stereotype.Service;
 
 import com.example.config.RagConfiguration;
 import com.example.tools.TransportTools;
+import com.example.tools.WeatherTools;
 
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -20,166 +21,122 @@ import java.util.List;
 @RequiredArgsConstructor
 @Slf4j
 public class AIAgent {
-    private final ChatClient.Builder builder;
-    private final TransportTools transportTools; // Renommé pour cohérence
+	private final ChatClient.Builder builder;
+    private final TransportTools transportTools;
+    private final WeatherTools weatherTools;
     private final VectorStore vectorStore;
+
     private ChatClient chatClient;
-    
-    // Seuil de tokens pour décider si on envoie tout le document
-    private static final int SMALL_DOCUMENT_THRESHOLD = 10000; // ~3 pages
+
+    private static final int SMALL_DOCUMENT_THRESHOLD = 10000;
 
     @PostConstruct
     public void init() {
-        log.info("🤖 Initialisation de l'AIAgent UNIVERSEL avec RAG Hybride");
-        
-        // Vérifier si le document est assez petit pour être envoyé en entier
+        log.info("🤖 Initialisation de l'AIAgent UNIVERSEL avec RAG et WeatherTools");
+
         String fullText = RagConfiguration.getFullDocumentText();
         boolean isSmallDocument = fullText.length() < SMALL_DOCUMENT_THRESHOLD;
-        
+
         if (isSmallDocument) {
             log.info("📄 Document petit ({} caractères) - Mode contexte complet activé", fullText.length());
-            
-            // MODE 1 : Document complet dans le system prompt
+
             this.chatClient = builder
-                .defaultSystem("""
-                    Tu es un assistant expert qui répond UNIQUEMENT à partir du document suivant.
-                    
-                    === DOCUMENT COMPLET ===
-                    """ + fullText + """
-                    
-                    === FIN DU DOCUMENT ===
-                    
-                    INSTRUCTIONS :
-                    1. Lis ATTENTIVEMENT tout le document ci-dessus
-                    2. Réponds UNIQUEMENT avec les informations du document
-                    3. Cite toujours la section et les valeurs exactes
-                    4. Format : "D'après le document (Section X.X) : [détails]"
-                    5. Si l'info n'est pas dans le document : dis "Information non trouvée dans le document"
-                    
-                    Ne donne JAMAIS d'informations générales ou inventées.
-                    """)
-                .defaultFunctions("getDelayedTransports", "getTransportDetailsByNumber") // Corrigé pour TransportTools
-                .build();
+                    .defaultSystem("""
+                        Tu es un assistant expert qui répond UNIQUEMENT à partir du document suivant et des outils disponibles.
+                        
+                        === DOCUMENT COMPLET ===
+                        """ + fullText + """
+                        
+                        === FIN DU DOCUMENT ===
+                        
+                        INSTRUCTIONS :
+                        1. Lis ATTENTIVEMENT tout le document ci-dessus
+                        2. Réponds UNIQUEMENT avec les informations du document
+                        3. Cite toujours la section et les valeurs exactes
+                        4. Format : "D'après le document (Section X.X) : [détails]"
+                        5. Si l'info n'est pas dans le document : dis "Information non trouvée dans le document"
+                        """)
+                    .defaultFunctions(
+                            "getDelayedTransports",
+                            "getTransportDetailsByNumber",
+                            "currentWeather",
+                            "forecastWeather"
+                    )
+                    .build();
+
         } else {
             log.info("📚 Document volumineux ({} caractères) - Mode RAG hybride activé", fullText.length());
-            
-            // MODE 2 : RAG classique pour documents volumineux
+
             this.chatClient = builder
-                .defaultSystem("""
-                    Tu es un assistant expert qui répond à partir des extraits de documents fournis.
-                    
-                    INSTRUCTIONS :
-                    1. Le contexte ci-dessous contient les passages pertinents du document
-                    2. Lis ATTENTIVEMENT tous les extraits fournis
-                    3. Réponds en citant les sections et valeurs exactes
-                    4. Format : "D'après le document (Section X.X) : [détails]"
-                    5. Si l'info n'est pas dans le contexte : dis "Information non trouvée dans les extraits fournis"
-                    
-                    Ne donne JAMAIS d'informations générales ou inventées.
-                    """)
-                .defaultFunctions("getDelayedTransports", "getTransportDetailsByNumber") // Corrigé pour TransportTools
-                .build();
+                    .defaultSystem("""
+                        Tu es un assistant expert qui répond à partir des extraits de documents fournis et des outils disponibles.
+                        
+                        INSTRUCTIONS :
+                        1. Lis ATTENTIVEMENT tous les extraits fournis
+                        2. Réponds en citant les sections et valeurs exactes
+                        3. Format : "D'après le document (Section X.X) : [détails]"
+                        4. Si l'info n'est pas dans le contexte : dis "Information non trouvée dans les extraits fournis"
+                        """)
+                    .defaultFunctions(
+                            "getDelayedTransports",
+                            "getTransportDetailsByNumber",
+                            "currentWeather",
+                            "forecastWeather"
+                    )
+                    .build();
         }
-        
+
         log.info("✅ AIAgent UNIVERSEL initialisé avec succès");
     }
 
     public String chat(String userQuery) {
         log.info("💬 Question reçue : {}", userQuery);
-        
         try {
-            // Récupérer le contexte pertinent
             String context = getRelevantContext(userQuery);
-            
-            // Si document petit, le contexte est déjà dans le system prompt
+
             if (RagConfiguration.getFullDocumentText().length() < SMALL_DOCUMENT_THRESHOLD) {
                 log.info("📄 Utilisation du contexte complet du system prompt");
-                String response = chatClient.prompt()
-                        .user(userQuery)
-                        .call()
-                        .content();
-                
-                log.info("✅ Réponse générée ({} caractères)", response.length());
-                return response;
+                return chatClient.prompt().user(userQuery).call().content();
             } else {
-                // Pour documents volumineux, ajouter le contexte à la requête
                 String enrichedQuery = """
                     CONTEXTE DU DOCUMENT :
                     """ + context + """
                     
                     QUESTION :
                     """ + userQuery;
-                
+
                 log.info("📚 Contexte ajouté ({} caractères)", context.length());
-                
-                String response = chatClient.prompt()
-                        .user(enrichedQuery)
-                        .call()
-                        .content();
-                
-                log.info("✅ Réponse générée ({} caractères)", response.length());
-                return response;
+                return chatClient.prompt().user(enrichedQuery).call().content();
             }
-            
+
         } catch (Exception e) {
             log.error("❌ Erreur lors du traitement de la requête", e);
             return "Désolé, une erreur s'est produite : " + e.getMessage();
         }
     }
-    
-    /**
-     * Récupère le contexte pertinent avec stratégie hybride améliorée
-     */
+
     private String getRelevantContext(String query) {
         log.info("🔍 Recherche de contexte pertinent pour : {}", query);
-        
+
         List<Document> relevantDocs = new ArrayList<>();
-        
-        // STRATÉGIE AMÉLIORÉE : Recherche avec variations
         List<String> searchVariations = generateSearchVariations(query);
-        
-        for (String searchTerm : searchVariations) {
+
+        for (String term : searchVariations) {
             if (!relevantDocs.isEmpty()) break;
-            
-            try {
-                relevantDocs = vectorStore.similaritySearch(
-                    SearchRequest.query(searchTerm)
-                        .withTopK(8)
-                        .withSimilarityThreshold(0.15)
-                );
-                log.info("🎯 Recherche avec '{}' : {} documents trouvés", searchTerm, relevantDocs.size());
-            } catch (Exception e) {
-                log.warn("⚠ Recherche échouée pour '{}' : {}", searchTerm, e.getMessage());
-            }
+            relevantDocs = vectorStore.similaritySearch(
+                    SearchRequest.query(term).withTopK(8).withSimilarityThreshold(0.15)
+            );
+            log.info("🎯 Recherche '{}' : {} documents trouvés", term, relevantDocs.size());
         }
-        
-        // STRATÉGIE 2 : Si vectorielle échoue, recherche par mots-clés
-        if (relevantDocs.isEmpty()) {
-            log.info("🔄 Passage à la recherche par mots-clés...");
-            for (String searchTerm : searchVariations) {
-                relevantDocs = RagConfiguration.keywordSearch(searchTerm, 8);
-                if (!relevantDocs.isEmpty()) {
-                    log.info("📝 Recherche par mots-clés avec '{}' : {} documents", searchTerm, relevantDocs.size());
-                    break;
-                }
-            }
-        }
-        
-        // STRATÉGIE 3 : Recherche manuelle pour termes spécifiques
-        if (relevantDocs.isEmpty() && query.toLowerCase().contains("retard")) {
-            log.info("🔎 Recherche manuelle des sections sur les retards...");
-            relevantDocs = searchManualSections();
-        }
-        
-        // STRATÉGIE 4 : Si tout échoue, retourner tout le document
+
         if (relevantDocs.isEmpty()) {
             log.warn("⚠ Aucun résultat - Utilisation du document complet");
             return RagConfiguration.getFullDocumentText();
         }
-        
+
         return buildContextFromDocuments(relevantDocs);
     }
-    
+
     /**
      * Génère des variations de recherche pour améliorer les résultats
      */

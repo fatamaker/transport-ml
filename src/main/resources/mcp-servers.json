@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "weather": {
+    "command": ["cmd.exe", "/c", "npx", "-y", "@timlukahorstmann/mcp-weather"],
+      "args": ["-y", "@timlukahorstmann/mcp-weather"],
+      "env": {
+        "ACCUWEATHER_API_KEY": "zpka_64c0f8189f4940c9944245061894e552_e2912fdc"
+      }
+    }
+  }
+}
